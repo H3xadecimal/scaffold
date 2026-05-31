@@ -1,6 +1,7 @@
 # bot.py
 import discord
 from discord.ext import commands
+from discord import app_commands
 import os
 import traceback
 import asyncio
@@ -20,6 +21,16 @@ bot = commands.Bot(command_prefix=PREFIX, intents=intents)
 
 # --- Module Loader ---
 async def load_cogs():
+
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} commands")
+    except Exception as e:
+        print(f"[INTERACTIONS FAILURE]")
+        traceback.print_exc()
+        if bot.is_ready():
+            asyncio.create_task(notify_owner_of_failure(e))
+
     for filename in os.listdir("./cogs"):
         if filename.endswith(".py") and filename != "__init__.py":
             cog_name = filename[:-3]
@@ -56,33 +67,32 @@ async def on_ready():
 
 
 # --- Core Commands ---
-@bot.command()
-async def ping(ctx):
+@bot.tree.command(name="ping", description="Gives the Latency of the Bot.")
+async def ping(interaction: discord.Interaction):
     """Ping command showing latency."""
     latency = bot.latency * 1000  # seconds → ms
-    await ctx.send(f"Latency: {latency:.2f} ms")
+    await interaction.response.send_message(f"Latency: {latency:.2f} ms")
 
-@bot.command()
+@bot.tree.command(name="shutdown", description="Shuts down the Bot.")
 @commands.is_owner()
-async def shutdown(ctx):
-    """Safely shuts down the bot."""
-    await ctx.send("Shutting down...")
+async def shutdown(interaction: discord.Interaction):
+    await interaction.response.send_message("Shutting down...")
     await bot.close()
 
-@bot.command()
+@bot.tree.command()
 @commands.is_owner()
-async def reload(ctx, module: str = None):
+async def reload(interaction: discord.Interaction, module: str = None):
     """Reloads cogs. Use !reload or !reload <module>"""
     if module:
         try:
             await bot.reload_extension(f"cogs.{module}")
-            await ctx.send(f"Reloaded '{module}'.")
+            await interaction.response.send_message(f"Reloaded '{module}'.")
         except Exception as e:
             tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-            await ctx.send(f"Failed to reload '{module}':\n```py\n{tb[:1500]}```")
+            await interaction.response.send_message(f"Failed to reload '{module}':\n```py\n{tb[:1500]}```")
             await notify_owner_of_failure(f"{module}.py", e)
     else:
-        await ctx.send("Reloading all modules...")
+        await interaction.response.send_message("Reloading all modules...")
         for filename in os.listdir("./cogs"):
             if filename.endswith(".py"):
                 try:
@@ -90,7 +100,7 @@ async def reload(ctx, module: str = None):
                     print(f"[RELOAD] {filename}")
                 except Exception as e:
                     await notify_owner_of_failure(filename, e)
-        await ctx.send("All modules reloaded.")
+        await interaction.response.send_message("All modules reloaded.")
 
 
 # --- Run ---

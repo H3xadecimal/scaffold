@@ -73,6 +73,14 @@ class Reminder(commands.Cog):
     # ----------------
     @commands.command(name="remindme")
     async def remindme(self, ctx, *, args):
+        """
+        Sets a One-time Reminder, help remindme for format.
+        Examples:
+        !remindme 60 seconds do thing
+        !remindme 60 minutes do another thing
+        !remindme 60 hours do another another thing
+        !remindme 60 days do yet another thing
+        """
         match = re.match(r"(\d+)\s*(seconds?|minutes?|hours?|days?)\s+(.+)", args, re.I)
         if not match:
             await ctx.send("Invalid format. Example: `!remindme 2 days do something`")
@@ -104,6 +112,7 @@ class Reminder(commands.Cog):
     @commands.command(name="repeatme")
     async def repeatme(self, ctx, *, args):
         """
+        Sets a Repeating Reminder, do help repeatme for format.
         Examples:
         !repeatme every 24 hours check something
         !repeatme every day do this
