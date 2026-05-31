@@ -21,24 +21,14 @@ bot = commands.Bot(command_prefix=PREFIX, intents=intents)
 
 # --- Module Loader ---
 async def load_cogs():
-
-    try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} commands")
-    except Exception as e:
-        print(f"[INTERACTIONS FAILURE]")
-        traceback.print_exc()
-        if bot.is_ready():
-            asyncio.create_task(notify_owner_of_failure(e))
-
     for filename in os.listdir("./cogs"):
         if filename.endswith(".py") and filename != "__init__.py":
             cog_name = filename[:-3]
             try:
                 await bot.load_extension(f"cogs.{cog_name}")  # await it
-                print(f"[OK] Loaded: {filename}")
+                print(f"[MODULE PASS] Loaded: {filename}")
             except Exception as e:
-                print(f"[FAIL] {filename}")
+                print(f"[MODULE FAILURE] {filename}")
                 traceback.print_exc()
                 # async DM safely
                 if bot.is_ready():  # check bot is logged in
@@ -46,14 +36,14 @@ async def load_cogs():
 
 
 async def notify_owner_of_failure(filename, error):
-    """DMs the owner if a cog fails to load."""
+    """DMs the owner if a failure occurs with Interactions or Modules"""
     try:
         owner = await bot.fetch_user(bot.owner_id)
         tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))
-        msg = f"Module '{filename}' failed to load:\n```py\n{tb[:1900]}```"
+        msg = f"[FAILURE]:\n```py\n{tb[:1900]}```"
         await owner.send(msg)
     except Exception as e:
-        print(f"[WARN] Could not DM owner: {e}")
+        print(f"[WARNING] Could not DM owner: {e}")
 
 
 # --- Events ---
@@ -64,6 +54,14 @@ async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     await load_cogs()
     print("All systems operational.\n------")
+
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} commands")
+    except Exception as e:
+        traceback.print_exc()
+        if bot.is_ready():
+            asyncio.create_task(notify_owner_of_failure(e))
 
 
 # --- Core Commands ---
