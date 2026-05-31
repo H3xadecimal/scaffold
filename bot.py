@@ -61,6 +61,7 @@ async def on_ready():
     except Exception as e:
         traceback.print_exc()
         if bot.is_ready():
+            print(f"[INTERACTIONS FAILURE]", e)
             asyncio.create_task(notify_owner_of_failure(e))
 
 
