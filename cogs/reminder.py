@@ -68,6 +68,10 @@ class Reminder(commands.Cog):
                 self.reminders.remove(r)
             self.save_reminders()
 
+    @check_reminders.before_loop
+    async def before_check_reminders(self):
+        await self.bot.wait_until_ready()
+
     # ----------------
     # Slash Commands
     # ----------------
