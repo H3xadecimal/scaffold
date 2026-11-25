@@ -1,10 +1,7 @@
 # cogs/reminder.py
 from discord.ext import commands, tasks
-from discord import app_commands
 import discord
-import asyncio
 from datetime import datetime, timedelta
-import re
 import json
 import os
 import calendar
@@ -73,21 +70,13 @@ class Reminder(commands.Cog):
         await self.bot.wait_until_ready()
 
     # ----------------
-    # Slash Commands
+    # Prefix Commands
     # ----------------
-    @app_commands.command(name="remindme", description="Set a one-time reminder.")
-    @app_commands.describe(
-        amount="How many units of time",
-        unit="Unit of time",
-        message="What to remind you about"
-    )
-    @app_commands.choices(unit=[
-        app_commands.Choice(name="Seconds", value="seconds"),
-        app_commands.Choice(name="Minutes", value="minutes"),
-        app_commands.Choice(name="Hours", value="hours"),
-        app_commands.Choice(name="Days", value="days"),
-    ])
-    async def remindme(self, interaction: discord.Interaction, amount: int, unit: str, message: str):
+    @commands.command(name="remindme", description="Set a one-time reminder.")
+    async def remindme(self, ctx: commands.Context, amount: int, unit: str, *, message: str):
+        unit = unit.lower()
+        if amount <= 0 or unit not in {"seconds", "minutes", "hours", "days"}:
+            raise commands.BadArgument("Use a positive amount and seconds/minutes/hours/days.")
         delta = None
         if unit == "seconds":
             delta = timedelta(seconds=amount)
@@ -101,42 +90,52 @@ class Reminder(commands.Cog):
         remind_time = datetime.utcnow() + delta
         self.reminders.append({
             "time": remind_time,
-            "user_id": interaction.user.id,
+            "user_id": ctx.author.id,
             "message": message,
             "repeat": None
         })
         self.save_reminders()
-        await interaction.response.send_message(
-            f"Okay {interaction.user.mention}, I'll remind you in {amount} {unit}.",
-            ephemeral=True
+        await ctx.send(
+            f"Okay {ctx.author.mention}, I'll remind you in {amount} {unit}."
         )
 
-    @app_commands.command(name="repeatme", description="Set a repeating reminder.")
-    @app_commands.describe(
-        repeat_type="How often to repeat",
-        message="What to remind you about",
-        interval_amount="Amount (only for 'Every N units')",
-        interval_unit="Unit (only for 'Every N units')",
-        day_of_month="Day of month 1–31 (only for 'Day of month')",
-        specific_date="Specific date YYYY-MM-DD (only for 'Specific date')"
-    )
-    @app_commands.choices(repeat_type=[
-        app_commands.Choice(name="Every N units", value="interval"),
-        app_commands.Choice(name="Every day", value="day"),
-        app_commands.Choice(name="Every week", value="week"),
-        app_commands.Choice(name="Every month", value="month"),
-        app_commands.Choice(name="Day of month", value="day_of_month"),
-        app_commands.Choice(name="Specific date", value="specific_date"),
-    ])
-    @app_commands.choices(interval_unit=[
-        app_commands.Choice(name="Seconds", value="seconds"),
-        app_commands.Choice(name="Minutes", value="minutes"),
-        app_commands.Choice(name="Hours", value="hours"),
-        app_commands.Choice(name="Days", value="days"),
-    ])
-    async def repeatme(
+    @commands.command(name="repeatme", help=(
+        "repeatme day|week|month <message>\n"
+        "repeatme interval <amount> <seconds|minutes|hours|days> <message>\n"
+        "repeatme day_of_month <1-31> <message>\n"
+        "repeatme specific_date <YYYY-MM-DD> <message> (one-time, UTC)"
+    ))
+    async def repeatme(self, ctx: commands.Context, repeat_type: str, *, details: str):
+        repeat_type = repeat_type.lower()
+        kwargs = {}
+        try:
+            if repeat_type == "interval":
+                amount, unit, message = details.split(maxsplit=2)
+                amount = int(amount)
+                unit = unit.lower()
+                if amount <= 0 or unit not in {"seconds", "minutes", "hours", "days"}:
+                    raise ValueError()
+                kwargs = dict(interval_amount=amount, interval_unit=unit)
+            elif repeat_type == "day_of_month":
+                day, message = details.split(maxsplit=1)
+                day = int(day)
+                if not 1 <= day <= 31:
+                    raise ValueError()
+                kwargs = dict(day_of_month=day)
+            elif repeat_type == "specific_date":
+                date, message = details.split(maxsplit=1)
+                kwargs = dict(specific_date=date)
+            elif repeat_type in {"day", "week", "month"}:
+                message = details
+            else:
+                raise ValueError()
+        except ValueError as error:
+            raise commands.BadArgument("Invalid reminder options.") from error
+        await self._repeatme(ctx, repeat_type, message, **kwargs)
+
+    async def _repeatme(
         self,
-        interaction: discord.Interaction,
+        ctx: commands.Context,
         repeat_type: str,
         message: str,
         interval_amount: int = None,
@@ -148,9 +147,8 @@ class Reminder(commands.Cog):
 
         if repeat_type == "interval":
             if interval_amount is None or interval_unit is None:
-                await interaction.response.send_message(
-                    "Please provide both `interval_amount` and `interval_unit` for 'Every N units'.",
-                    ephemeral=True
+                await ctx.send(
+                    "Please provide both `interval_amount` and `interval_unit` for 'Every N units'."
                 )
                 return
             delta = None
@@ -165,35 +163,35 @@ class Reminder(commands.Cog):
 
             self.reminders.append({
                 "time": now + delta,
-                "user_id": interaction.user.id,
+                "user_id": ctx.author.id,
                 "message": message,
                 "repeat": "interval",
                 "interval_seconds": delta.total_seconds()
             })
             self.save_reminders()
-            await interaction.response.send_message(
-                f"Repeat reminder set every {interval_amount} {interval_unit}.", ephemeral=True
+            await ctx.send(
+                f"Repeat reminder set every {interval_amount} {interval_unit}."
             )
 
         elif repeat_type == "day":
             self.reminders.append({
                 "time": now + timedelta(days=1),
-                "user_id": interaction.user.id,
+                "user_id": ctx.author.id,
                 "message": message,
                 "repeat": "day"
             })
             self.save_reminders()
-            await interaction.response.send_message("Repeat reminder set for every day.", ephemeral=True)
+            await ctx.send("Repeat reminder set for every day.")
 
         elif repeat_type == "week":
             self.reminders.append({
                 "time": now + timedelta(weeks=1),
-                "user_id": interaction.user.id,
+                "user_id": ctx.author.id,
                 "message": message,
                 "repeat": "week"
             })
             self.save_reminders()
-            await interaction.response.send_message("Repeat reminder set for every week.", ephemeral=True)
+            await ctx.send("Repeat reminder set for every week.")
 
         elif repeat_type == "month":
             month = now.month + 1 if now.month < 12 else 1
@@ -202,17 +200,17 @@ class Reminder(commands.Cog):
             next_time = datetime(year, month, day, now.hour, now.minute, now.second)
             self.reminders.append({
                 "time": next_time,
-                "user_id": interaction.user.id,
+                "user_id": ctx.author.id,
                 "message": message,
                 "repeat": "month"
             })
             self.save_reminders()
-            await interaction.response.send_message("Repeat reminder set for every month.", ephemeral=True)
+            await ctx.send("Repeat reminder set for every month.")
 
         elif repeat_type == "day_of_month":
             if day_of_month is None:
-                await interaction.response.send_message(
-                    "Please provide `day_of_month` for this repeat type.", ephemeral=True
+                await ctx.send(
+                    "Please provide `day_of_month` for this repeat type."
                 )
                 return
             year = now.year
@@ -226,51 +224,51 @@ class Reminder(commands.Cog):
             next_time = datetime(year, month, day, now.hour, now.minute, now.second)
             self.reminders.append({
                 "time": next_time,
-                "user_id": interaction.user.id,
+                "user_id": ctx.author.id,
                 "message": message,
                 "repeat": "month"
             })
             self.save_reminders()
-            await interaction.response.send_message(
-                f"Repeat reminder set for day {day} of every month.", ephemeral=True
+            await ctx.send(
+                f"Repeat reminder set for day {day} of every month."
             )
 
         elif repeat_type == "specific_date":
             if specific_date is None:
-                await interaction.response.send_message(
-                    "Please provide `specific_date` in YYYY-MM-DD format.", ephemeral=True
+                await ctx.send(
+                    "Please provide `specific_date` in YYYY-MM-DD format."
                 )
                 return
             try:
                 next_time = datetime.strptime(specific_date, "%Y-%m-%d")
                 if next_time < now:
-                    await interaction.response.send_message("That date is in the past.", ephemeral=True)
+                    await ctx.send("That date is in the past.")
                     return
                 self.reminders.append({
                     "time": next_time,
-                    "user_id": interaction.user.id,
+                    "user_id": ctx.author.id,
                     "message": message,
                     "repeat": None
                 })
                 self.save_reminders()
-                await interaction.response.send_message(
-                    f"Reminder set for {specific_date}.", ephemeral=True
+                await ctx.send(
+                    f"Reminder set for {specific_date}."
                 )
             except ValueError:
-                await interaction.response.send_message(
-                    "Invalid date format. Use YYYY-MM-DD.", ephemeral=True
+                await ctx.send(
+                    "Invalid date format. Use YYYY-MM-DD."
                 )
 
-    @app_commands.command(name="listreminders", description="List all your upcoming reminders.")
-    async def listreminders(self, interaction: discord.Interaction):
+    @commands.command(name="listreminders", description="List all your upcoming reminders.")
+    async def listreminders(self, ctx: commands.Context):
         now = datetime.utcnow()
         user_reminders = [
             r for r in self.reminders
-            if r["user_id"] == interaction.user.id and r["time"] > now
+            if r["user_id"] == ctx.author.id and r["time"] > now
         ]
 
         if not user_reminders:
-            await interaction.response.send_message("You have no upcoming reminders.", ephemeral=True)
+            await ctx.send("You have no upcoming reminders.")
             return
 
         lines = []
@@ -283,17 +281,16 @@ class Reminder(commands.Cog):
         message = "\n".join(lines)
         if len(message) > 1900:
             message = message[:1900] + "\n..."
-        await interaction.response.send_message(
-            f"Your upcoming reminders:\n{message}", ephemeral=True
+        await ctx.send(
+            f"Your upcoming reminders:\n{message}"
         )
 
-    @app_commands.command(name="cancelreminder", description="Cancel a reminder by keyword.")
-    @app_commands.describe(keyword="Text contained in the reminder you want to cancel")
-    async def cancelreminder(self, interaction: discord.Interaction, keyword: str):
-        user_reminders = [r for r in self.reminders if r["user_id"] == interaction.user.id]
+    @commands.command(name="cancelreminder", description="Cancel a reminder by keyword.")
+    async def cancelreminder(self, ctx: commands.Context, *, keyword: str):
+        user_reminders = [r for r in self.reminders if r["user_id"] == ctx.author.id]
 
         if not user_reminders:
-            await interaction.response.send_message("You have no reminders to cancel.", ephemeral=True)
+            await ctx.send("You have no reminders to cancel.")
             return
 
         removed = [r for r in user_reminders if keyword.lower() in r["message"].lower()]
@@ -301,12 +298,12 @@ class Reminder(commands.Cog):
             for r in removed:
                 self.reminders.remove(r)
             self.save_reminders()
-            await interaction.response.send_message(
-                f"Removed {len(removed)} reminder(s) containing '{keyword}'.", ephemeral=True
+            await ctx.send(
+                f"Removed {len(removed)} reminder(s) containing '{keyword}'."
             )
         else:
-            await interaction.response.send_message(
-                f"No reminders found containing '{keyword}'.", ephemeral=True
+            await ctx.send(
+                f"No reminders found containing '{keyword}'."
             )
 
     # ----------------
