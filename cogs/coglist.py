@@ -1,19 +1,18 @@
-# cogs/coglist.py
+import discord
+from discord import app_commands
 from discord.ext import commands
+
 
 class CogList(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.command(name="cogs")
-    async def list_cogs(self, ctx):
-        """Lists all loaded cogs including this one."""
-        cogs = list(self.bot.cogs.keys())
-        if cogs:
-            cog_list = "\n".join(cogs)
-            await ctx.send(f"Loaded cogs:\n{cog_list}")
-        else:
-            await ctx.send("No cogs are currently loaded.")
+    @app_commands.command(name="cogs", description="List the currently loaded modules.")
+    async def list_cogs(self, interaction: discord.Interaction):
+        names = "\n".join(self.bot.cogs)
+        text = f"Loaded cogs:\n{names}" if names else "No cogs are currently loaded."
+        await interaction.response.send_message(text[:2000], ephemeral=True)
+
 
 async def setup(bot):
     await bot.add_cog(CogList(bot))

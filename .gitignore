@@ -4,3 +4,4 @@ __pycache__/
 assets/
 cogs/weather.py
 reminders.json
+.venv/

@@ -1,106 +1,125 @@
-# bot.py
-import discord
-from discord.ext import commands
-from discord import app_commands
-import os
-import traceback
 import asyncio
+import logging
+import os
+from pathlib import Path
+import traceback
+
+import discord
+from discord import app_commands
+from discord.ext import commands
 from dotenv import load_dotenv
+
 load_dotenv()
-
-# --- CONFIG ---
-TOKEN = os.getenv("DISCORD_TOKEN")
-PREFIX = os.getenv("PREFIX")
-# --------------
-
-intents = discord.Intents.default()
-intents.message_content = True
-
-bot = commands.Bot(command_prefix=PREFIX, intents=intents)
+COG_DIR = Path(__file__).resolve().parent / "cogs"
+log = logging.getLogger(__name__)
 
 
-# --- Module Loader ---
-async def load_cogs():
-    for filename in os.listdir("./cogs"):
-        if filename.endswith(".py") and filename != "__init__.py":
-            cog_name = filename[:-3]
+class ScaffoldBot(commands.Bot):
+    def __init__(self):
+        # Retain extension/Cog support without processing message commands.
+        super().__init__(command_prefix=commands.when_mentioned,
+                         help_command=None, intents=discord.Intents.default())
+
+    async def on_message(self, message):
+        """All commands are application commands; message content is not needed."""
+
+    async def setup_hook(self):
+        for path in sorted(COG_DIR.glob("*.py")):
+            if path.name == "__init__.py":
+                continue
             try:
-                await bot.load_extension(f"cogs.{cog_name}")  # await it
-                print(f"[MODULE PASS] Loaded: {filename}")
-            except Exception as e:
-                print(f"[MODULE FAILURE] {filename}")
-                traceback.print_exc()
-                # async DM safely
-                if bot.is_ready():  # check bot is logged in
-                    asyncio.create_task(notify_owner_of_failure(filename, e))
+                await self.load_extension(f"cogs.{path.stem}")
+            except Exception as error:
+                log.exception("Failed to load %s", path.name)
+                await notify_owner_of_failure(path.name, error)
+        # setup_hook runs once at login, not again on gateway reconnects.
+        synced = await self.tree.sync()
+        log.info("Synced %s application commands", len(synced))
+
+
+bot = ScaffoldBot()
 
 
 async def notify_owner_of_failure(filename, error):
-    """DMs the owner if a failure occurs with Interactions or Modules"""
     try:
+        if bot.owner_id is None:
+            info = await bot.application_info()
+            bot.owner_id = info.team.owner_id if info.team else info.owner.id
         owner = await bot.fetch_user(bot.owner_id)
         tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))
-        msg = f"[FAILURE]:\n```py\n{tb[:1900]}```"
-        await owner.send(msg)
-    except Exception as e:
-        print(f"[WARNING] Could not DM owner: {e}")
+        await owner.send(f"[FAILURE] {filename}:\n```py\n{tb[:1500]}```")
+    except Exception:
+        log.exception("Could not notify owner")
 
 
-# --- Events ---
+async def owner_only(interaction: discord.Interaction) -> bool:
+    return await bot.is_owner(interaction.user)
+
+
+@bot.tree.error
+async def on_app_command_error(interaction, error):
+    if isinstance(error, app_commands.CheckFailure):
+        message = "You do not have permission to use this command."
+    else:
+        log.error("Application command failed", exc_info=(type(error), error, error.__traceback__))
+        message = "The command failed. Check the bot logs for details."
+    if interaction.response.is_done():
+        await interaction.followup.send(message, ephemeral=True)
+    else:
+        await interaction.response.send_message(message, ephemeral=True)
+
+
 @bot.event
 async def on_ready():
-    app_info = await bot.application_info()
-    bot.owner_id = app_info.owner.id # Incompatible with group applications, i think.
-    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    await load_cogs()
-    print("All systems operational.\n------")
-
-    try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} commands")
-    except Exception as e:
-        traceback.print_exc()
-        if bot.is_ready():
-            print(f"[INTERACTIONS FAILURE]", e)
-            asyncio.create_task(notify_owner_of_failure(e))
+    log.info("Logged in as %s (ID: %s)", bot.user, bot.user.id)
 
 
-# --- Core Commands ---
-@bot.tree.command(name="ping", description="Gives the Latency of the Bot.")
+@bot.tree.command(name="ping", description="Show the bot's gateway latency.")
 async def ping(interaction: discord.Interaction):
-    """Ping command showing latency."""
-    latency = bot.latency * 1000  # seconds → ms
-    await interaction.response.send_message(f"Latency: {latency:.2f} ms")
+    await interaction.response.send_message(f"Latency: {bot.latency * 1000:.2f} ms")
 
-@bot.tree.command(name="shutdown", description="Shuts down the Bot.")
-@commands.is_owner()
+
+@bot.tree.command(name="shutdown", description="Shut down the bot (owner only).")
+@app_commands.check(owner_only)
 async def shutdown(interaction: discord.Interaction):
-    await interaction.response.send_message("Shutting down...")
+    await interaction.response.send_message("Shutting down...", ephemeral=True)
     await bot.close()
 
-@bot.tree.command()
-@commands.is_owner()
-async def reload(interaction: discord.Interaction, module: str = None):
-    """Reloads cogs. Use !reload or !reload <module>"""
-    if module:
+
+@bot.tree.command(name="reload", description="Reload one or all modules (owner only).")
+@app_commands.describe(module="Module name without .py; omit to reload all modules")
+@app_commands.check(owner_only)
+async def reload(interaction: discord.Interaction, module: str | None = None):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    available = {p.stem for p in COG_DIR.glob("*.py") if p.name != "__init__.py"}
+    if module is not None and module not in available:
+        await interaction.followup.send("Unknown module. Use its name without .py.", ephemeral=True)
+        return
+    results = []
+    for name in sorted(available if module is None else {module}):
+        extension = f"cogs.{name}"
         try:
-            await bot.reload_extension(f"cogs.{module}")
-            await interaction.response.send_message(f"Reloaded '{module}'.")
-        except Exception as e:
-            tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-            await interaction.response.send_message(f"Failed to reload '{module}':\n```py\n{tb[:1500]}```")
-            await notify_owner_of_failure(f"{module}.py", e)
-    else:
-        await interaction.response.send_message("Reloading all modules...")
-        for filename in os.listdir("./cogs"):
-            if filename.endswith(".py"):
-                try:
-                    await bot.reload_extension(f"cogs.{filename[:-3]}")
-                    print(f"[RELOAD] {filename}")
-                except Exception as e:
-                    await notify_owner_of_failure(filename, e)
-        await interaction.response.send_message("All modules reloaded.")
+            if extension in bot.extensions:
+                await bot.reload_extension(extension)
+            else:
+                await bot.load_extension(extension)
+            results.append(f"Reloaded '{name}'.")
+        except Exception as error:
+            log.exception("Failed to reload %s", name)
+            results.append(f"Failed to reload '{name}'; check the bot logs.")
+            await notify_owner_of_failure(name, error)
+    try:
+        await bot.tree.sync()
+    except Exception:
+        log.exception("Failed to sync application commands after reload")
+        results.append("Command sync failed; check the bot logs.")
+    text = "\n".join(results) or "No modules found."
+    for offset in range(0, len(text), 1900):
+        await interaction.followup.send(text[offset:offset + 1900], ephemeral=True)
 
 
-# --- Run ---
-bot.run(TOKEN)
+if __name__ == "__main__":
+    token = os.getenv("DISCORD_TOKEN")
+    if not token:
+        raise SystemExit("Set DISCORD_TOKEN in .env before starting the bot.")
+    bot.run(token)
